@@ -1,9 +1,9 @@
 import torch
 from .base_model import BaseModel
-from . import networks
+from . import networks_tum as networks
 
 
-class Pix2PixModel(BaseModel):
+class Pix2PixTUMModel(BaseModel):
     """ This class implements the pix2pix model, for learning a mapping from input images to output images given paired data.
 
     The model training requires '--dataset_mode aligned' dataset.
@@ -33,6 +33,7 @@ class Pix2PixModel(BaseModel):
         if is_train:
             parser.set_defaults(pool_size=0, gan_mode='vanilla')
             parser.add_argument('--lambda_L1', type=float, default=100.0, help='weight for L1 loss')
+            parser.add_argument('--lambda_Dice', type=float, default=100.0, help='weight for Dice loss')
 
         return parser
 
@@ -44,12 +45,12 @@ class Pix2PixModel(BaseModel):
         """
         BaseModel.__init__(self, opt)
         # specify the training losses you want to print out. The training/test scripts will call <BaseModel.get_current_losses>
-        self.loss_names = ['G_GAN', 'G_L1', 'D_real', 'D_fake']
+        self.loss_names = ['G_GAN', 'G_L1', 'G_Dice', 'D_real', 'D_fake']
         # specify the images you want to save/display. The training/test scripts will call <BaseModel.get_current_visuals>
-        self.visual_names = ['real_A', 'fake_B', 'real_B']
+        self.visual_names = ['real_A', 'fake_B', 'real_B', 'real_S', 'fake_S']
         # specify the models you want to save to the disk. The training/test scripts will call <BaseModel.save_networks> and <BaseModel.load_networks>
         if self.isTrain:
-            self.model_names = ['G', 'D']
+            self.model_names = ['G', 'D', 'S']
         else:  # during test time, only load G
             self.model_names = ['G']
         # define networks (both generator and discriminator)
@@ -76,18 +77,32 @@ class Pix2PixModel(BaseModel):
                                           opt.init_gain, 
                                           self.gpu_ids)
 
+            # define the segmentation network
+            self.netS = networks.define_S(opt.output_nc, 
+                                          1, 
+                                          opt.ngf, 
+                                          opt.netG, 
+                                          opt.norm,
+                                          not opt.no_dropout, 
+                                          opt.init_type, 
+                                          opt.init_gain, 
+                                          self.gpu_ids)
+
         if self.isTrain:
 
             # define loss functions
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionL1 = torch.nn.L1Loss()
+            self.criterionDice = networks.DiceLoss()
 
             # initialize optimizers 
             # schedulers will be automatically created by function <BaseModel.setup>
             self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+            self.optimizer_S = torch.optim.Adam(self.netS.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
+            self.optimizers.append(self.optimizer_S)
 
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -100,11 +115,21 @@ class Pix2PixModel(BaseModel):
         AtoB = self.opt.direction == 'AtoB'
         self.real_A = input['A' if AtoB else 'B'].to(self.device)
         self.real_B = input['B' if AtoB else 'A'].to(self.device)
-        self.image_paths = input['A_paths' if AtoB else 'B_paths']
+        self.real_S = input['S'].to(self.device)
+        # self.image_paths = input['A_paths' if AtoB else 'B_paths']
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
         self.fake_B = self.netG(self.real_A)  # G(A)
+        self.fake_S = self.netS(self.fake_B)  # fake segmentation 
+
+        # print('-------------------------------------------------------')
+        # print('Real A', torch.min(self.real_A), torch.max(self.real_A))
+        # print('Fake B', torch.min(self.fake_B), torch.max(self.fake_B))
+        # print('Real B', torch.min(self.real_B), torch.max(self.real_B))
+        # print('Fake S', torch.min(self.fake_S), torch.max(self.fake_S))
+        # print('Real S', torch.min(self.real_S), torch.max(self.real_S))
+        # print('-------------------------------------------------------')
 
     def backward_D(self):
         """Calculate GAN loss for the discriminator"""
@@ -133,9 +158,19 @@ class Pix2PixModel(BaseModel):
 
         # Second, G(A) = B
         self.loss_G_L1 = self.criterionL1(self.fake_B, self.real_B) * self.opt.lambda_L1
-        # combine GAN loss and L1 loss for the generator and calculate gradients
-        self.loss_G = self.loss_G_GAN + self.loss_G_L1
+
+        # Third, S(G(A)) = true_S
+        self.loss_G_Dice = self.criterionDice(self.fake_S, self.real_S) * self.opt.lambda_Dice
+
+        # combine GAN loss, L1 loss and segmentation loss for the generator and calculate gradients
+        self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_Dice
         self.loss_G.backward()
+
+    def backward_S(self):
+        """Calculate GAN and L1 loss for the generator"""
+        fake_S = self.netS(self.fake_B.detach())  # fake segmentation
+        self.loss_S = self.criterionDice(fake_S, self.real_S)
+        self.loss_S.backward()
 
     def optimize_parameters(self):
         self.forward()                   # compute fake images: G(A)
@@ -148,6 +183,13 @@ class Pix2PixModel(BaseModel):
         
         # update G
         self.set_requires_grad(self.netD, False)  # D requires no gradients when optimizing G
+        self.set_requires_grad(self.netS, False)
         self.optimizer_G.zero_grad()        # set G's gradients to zero
         self.backward_G()                   # calculate graidents for G
         self.optimizer_G.step()             # udpate G's weights
+
+        # update S 
+        self.set_requires_grad(self.netS, True)  
+        self.optimizer_S.zero_grad()        # set S's gradients to zero
+        self.backward_S()                   # calculate graidents for S
+        self.optimizer_S.step()             # udpate S's weights

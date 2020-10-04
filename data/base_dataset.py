@@ -78,7 +78,7 @@ def get_params(opt, size):
     return {'crop_pos': (x, y), 'flip': flip}
 
 
-def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, convert=True):
+def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, convert=True, segmentation=False):
     transform_list = []
     if grayscale:
         transform_list.append(transforms.Grayscale(1))
@@ -105,10 +105,11 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
 
     if convert:
         transform_list += [transforms.ToTensor()]
-        if grayscale:
+        if grayscale and not segmentation:
             transform_list += [transforms.Normalize((0.5,), (0.5,))]
-        else:
+        elif not grayscale and not segmentation:
             transform_list += [transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+
     return transforms.Compose(transform_list)
 
 
@@ -130,7 +131,6 @@ def __scale_width(img, target_size, crop_size, method=Image.BICUBIC):
     w = target_size
     h = int(max(target_size * oh / ow, crop_size))
     return img.resize((w, h), method)
-
 
 def __crop(img, pos, size):
     ow, oh = img.size
