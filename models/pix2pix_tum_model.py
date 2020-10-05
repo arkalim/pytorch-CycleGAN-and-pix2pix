@@ -1,6 +1,6 @@
 import torch
 from .base_model import BaseModel
-from . import networks_tum as networks
+from . import networks as networks
 
 
 class Pix2PixTUMModel(BaseModel):
@@ -93,7 +93,7 @@ class Pix2PixTUMModel(BaseModel):
             # define loss functions
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionL1 = torch.nn.L1Loss()
-            self.criterionDice = networks.DiceLoss()
+            self.criterionDice = networks.BinaryDiceLoss()
 
             # initialize optimizers 
             # schedulers will be automatically created by function <BaseModel.setup>

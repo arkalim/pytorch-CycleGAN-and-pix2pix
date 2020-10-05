@@ -33,7 +33,7 @@ declarations:
   input_nc: 1
   output_nc: 1
   lambda_L1: 100
-  lambda_Dice: 0
+  lambda_Dice: 5
   n_epochs: 100
   n_epochs_decay: 100
 
