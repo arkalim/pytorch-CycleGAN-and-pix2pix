@@ -39,9 +39,9 @@ class TUMDataset(BaseDataset):
                 
     def __getitem__(self, index):
         
-        A = Image.fromarray(sitk.GetArrayFromImage(sitk.ReadImage(self.A_filenames[index]))[23])
-        B = Image.fromarray(sitk.GetArrayFromImage(sitk.ReadImage(self.B_filenames[index]))[23])
-        S = Image.fromarray(sitk.GetArrayFromImage(sitk.ReadImage(self.S_filenames[index]))[23])
+        A = Image.fromarray(sitk.GetArrayFromImage(sitk.ReadImage(self.A_filenames[index])))
+        B = Image.fromarray(sitk.GetArrayFromImage(sitk.ReadImage(self.B_filenames[index])))
+        S = Image.fromarray(sitk.GetArrayFromImage(sitk.ReadImage(self.S_filenames[index])))
 
         # apply the same transform to A, B and S
         transform_params = get_params(self.opt, A.size)

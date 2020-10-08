@@ -1,9 +1,10 @@
 import torch
 from .base_model import BaseModel
-from . import networks as networks
+from . import networks
+from . import networks_3d
 
 
-class Pix2PixTUMModel(BaseModel):
+class Pix2Pix3DModel(BaseModel):
     """ This class implements the pix2pix model, for learning a mapping from input images to output images given paired data.
 
     The model training requires '--dataset_mode aligned' dataset.
@@ -29,9 +30,12 @@ class Pix2PixTUMModel(BaseModel):
         By default, we use vanilla GAN loss, UNet with batchnorm, and aligned datasets.
         """
         # changing the default values to match the pix2pix paper (https://phillipi.github.io/pix2pix/)
-        parser.set_defaults(norm='batch', netG='unet_256', dataset_mode='aligned')
+        parser.set_defaults(norm='batch', netG='unet_128', dataset_mode='volume')
+        parser.add_argument('--netS', type=str, default='unet_128', help='Type of network used for segmentation')
+        parser.add_argument('--num_classes', type=int, default=2, help='num of classes for segmentation')
         if is_train:
             parser.set_defaults(pool_size=0, gan_mode='vanilla')
+            parser.add_argument('--no_lsgan', type=bool, default=False)
             parser.add_argument('--lambda_L1', type=float, default=100.0, help='weight for L1 loss')
             parser.add_argument('--lambda_Dice', type=float, default=100.0, help='weight for Dice loss')
 
@@ -47,53 +51,51 @@ class Pix2PixTUMModel(BaseModel):
         # specify the training losses you want to print out. The training/test scripts will call <BaseModel.get_current_losses>
         self.loss_names = ['G_GAN', 'G_L1', 'G_Dice', 'D_real', 'D_fake']
         # specify the images you want to save/display. The training/test scripts will call <BaseModel.get_current_visuals>
-        self.visual_names = ['real_A', 'fake_B', 'real_B', 'real_S', 'fake_S']
+        self.visual_names = ['real_A_center_sag', 'fake_B_center_sag', 'real_B_center_sag', 'real_S_center_sag', 'fake_S_center_sag']
+        self.visual_names += ['real_A_center_cor', 'fake_B_center_cor', 'real_B_center_cor', 'real_S_center_cor', 'fake_S_center_cor']
+        self.visual_names += ['real_A_center_axi', 'fake_B_center_axi', 'real_B_center_axi', 'real_S_center_axi', 'fake_S_center_axi']
         # specify the models you want to save to the disk. The training/test scripts will call <BaseModel.save_networks> and <BaseModel.load_networks>
         if self.isTrain:
             self.model_names = ['G', 'D', 'S']
         else:  # during test time, only load G
             self.model_names = ['G']
         # define networks (both generator and discriminator)
-        self.netG = networks.define_G(opt.input_nc, 
-                                      opt.output_nc, 
-                                      opt.ngf, 
-                                      opt.netG, 
-                                      opt.norm,
-                                      not opt.no_dropout, 
-                                      opt.init_type, 
-                                      opt.init_gain, 
-                                      self.gpu_ids)
+        self.netG = networks_3d.define_G(opt.input_nc, 
+                                        opt.output_nc, 
+                                        opt.ngf,
+                                        opt.netG, 
+                                        opt.norm, 
+                                        not opt.no_dropout, 
+                                        gpu_ids=self.gpu_ids)
 
         # define a discriminator 
         # conditional GANs need to take both input and output images 
         # Therefore, #channels for D is input_nc + output_nc
         if self.isTrain:  
-            self.netD = networks.define_D(opt.input_nc + opt.output_nc, 
-                                          opt.ndf, 
-                                          opt.netD,
-                                          opt.n_layers_D, 
-                                          opt.norm, 
-                                          opt.init_type, 
-                                          opt.init_gain, 
-                                          self.gpu_ids)
+            self.netD = networks_3d.define_D(opt.input_nc + opt.output_nc, 
+                                            opt.ndf,
+                                            opt.netD,
+                                            opt.n_layers_D, 
+                                            opt.norm, 
+                                            use_sigmoid=opt.no_lsgan, 
+                                            gpu_ids=self.gpu_ids)
 
             # define the segmentation network
-            self.netS = networks.define_S(opt.output_nc, 
-                                          1, 
-                                          opt.ngf, 
-                                          opt.netG, 
-                                          opt.norm,
-                                          not opt.no_dropout, 
-                                          opt.init_type, 
-                                          opt.init_gain, 
-                                          self.gpu_ids)
+            self.netS = networks_3d.define_G(opt.input_nc, 
+                                            opt.num_classes, 
+                                            opt.ngf,
+                                            opt.netS, 
+                                            opt.norm, 
+                                            not opt.no_dropout,
+                                            gpu_ids=self.gpu_ids, 
+                                            is_seg_net=True)
 
         if self.isTrain:
 
             # define loss functions
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionL1 = torch.nn.L1Loss()
-            self.criterionDice = networks.BinaryDiceLoss()
+            self.criterionDice = networks.DiceLoss()
 
             # initialize optimizers 
             # schedulers will be automatically created by function <BaseModel.setup>
@@ -193,3 +195,27 @@ class Pix2PixTUMModel(BaseModel):
         self.optimizer_S.zero_grad()        # set S's gradients to zero
         self.backward_S()                   # calculate graidents for S
         self.optimizer_S.step()             # udpate S's weights
+
+    def compute_visuals(self):
+        """Calculate additional output images for tensorboard visualization"""
+        n_c = self.real_A.shape[2]
+        # average over channel to get the real and fake image
+        self.real_A_center_sag = self.real_A[:, :, int(n_c / 2), ...]
+        self.fake_B_center_sag = self.fake_B[:, :, int(n_c / 2), ...]
+        self.real_B_center_sag = self.real_B[:, :, int(n_c / 2), ...]
+        self.real_S_center_sag = self.real_S[:, :, int(n_c / 2), ...]
+        self.fake_S_center_sag = self.fake_S[:, :, int(n_c / 2), ...]
+
+        n_c = self.real_A.shape[3]
+        self.real_A_center_cor = self.real_A[:, :, :, int(n_c / 2), ...]
+        self.fake_B_center_cor = self.fake_B[:, :, :, int(n_c / 2), ...]
+        self.real_B_center_cor = self.real_B[:, :, :, int(n_c / 2), ...]
+        self.real_S_center_cor = self.real_S[:, :, :, int(n_c / 2), ...]
+        self.fake_S_center_cor = self.fake_S[:, :, :, int(n_c / 2), ...]
+
+        n_c = self.real_A.shape[4]
+        self.real_A_center_axi = self.real_A[..., int(n_c / 2)]
+        self.fake_B_center_axi = self.fake_B[..., int(n_c / 2)]
+        self.real_B_center_axi = self.real_B[..., int(n_c / 2)]
+        self.real_S_center_axi = self.real_S[..., int(n_c / 2)]
+        self.fake_S_center_axi = self.fake_S[..., int(n_c / 2)]
