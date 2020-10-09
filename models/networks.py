@@ -726,6 +726,8 @@ class DiceLoss(nn.Module):
         self.ignore_index = ignore_index
 
     def forward(self, predict: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        predict = (predict - 1) / (-2)
+        target = (target + 1) / 2
         if predict.shape[1] != target.shape[1]:
             target_ = target.view(target.shape[0], target.shape[1], -1)
             target_ = F.one_hot(target_.to(torch.int64))

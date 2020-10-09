@@ -125,8 +125,10 @@ class VolumeDataset(BaseDataset):
             'B_paths': sample + "/trus.mhd"
         }
         if self.load_mask:
-            dict_['S'] = transformed_['mr_tree'].data[:, :self.input_size[0], :self.input_size[1], :self.input_size[2]]
-
+            mask = transformed_['mr_tree'].data[:, :self.input_size[0], :self.input_size[1], :self.input_size[2]]
+            ones = torch.ones_like(mask)
+            minus_ones = torch.ones_like(mask) * (-1)
+            dict_['S'] = torch.where(mask > 0, ones, minus_ones)
         return dict_
 
     def load_subject_(self, index):

@@ -132,7 +132,7 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
     """
     net = None
     if is_seg_net:
-        last_layer = None 
+        last_layer = nn.Tanh() 
         # TODO: softmax as last layer for resnet is not implemented
     else:
         last_layer = nn.Tanh()
